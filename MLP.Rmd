@@ -1,0 +1,115 @@
+---
+title: "MLProject"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+In this project, I take the data coming from IoT Devices for build a predictor of the movement type of a subject using a device with an IMU.
+
+## Exploratory Analisys
+Get the training and testing datasets from internet:
+
+```{r cars}
+url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+download.file(url,"testing.csv",method="curl")
+testing <- read.csv("testing.csv")
+url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+download.file(url,"training.csv",method="curl")
+training <- read.csv("training.csv")
+library(dplyr)
+
+```
+Remove columns with unnecessary data: these columns related to structure of sampling, including username.
+```{r}
+
+traindata <- training[,-(1:8)]
+```
+Filter columns with NA or empty spaces:
+```{r}
+rowsample <- traindata[1,]
+filtercolumns <- is.na(rowsample) | rowsample==""
+traindata <- traindata[,!filtercolumns]
+```
+Verify integrity of rows, these with all values present:
+```{r}
+sum(complete.cases(traindata))
+```
+This number is equal to number of observations in original training data.
+Verifying data types present in filtered dataset:
+```{r}
+table(sapply(traindata,class))
+```
+The char column is the classe column (outcome).
+Apply same filtering to testing dataset:
+```{r}
+testdata <- testing[,-(1:8)]
+testdata <- testdata[,!filtercolumns]
+```
+Now, we have 51 different covariates. Some are most significant than others. For compress data and have fewer covariates, I apply singular value decomposition for obtain the number of principal vectors needed for explain sufficient variety of the data.
+Compute Singular Vector Decomposition:
+```{r}
+sv <- svd(traindata[,-52])$d
+```
+Percent of variance explained by a subset of principal vectors:
+```{r}
+sapply(1:20,function(i) sum(sv[1:i]^2)/sum(sv^2))
+```
+We have 88% of the variance explained if we drop the sixth and above principal vectors. Generate first 5 principal vectors of the training dataset.
+```{r}
+library(caret)
+pcacompute <- preProcess(traindata[,-52],method=c("scale","center","pca"),pcaComp = 5)
+pcatraindata <- predict(pcacompute,traindata[,-52])
+pcatraindata <- data.frame(pcatraindata,class=traindata$classe)
+
+```
+We can plot first two of thee principal vectors for verify some difference between vectors and classes:
+```{r}
+ggplot(aes(x=PC1,y=PC2,col=class),data=pcatraindata)+geom_point()
+```
+We observe that classes are overlapping, but with some translations on cluster centers. Remember that, only viewing two principal components, we see only 66% of the variation. But another interesting fact, is that we see five blobs of points.
+Plotting same data, but coloring by user:
+```{r}
+ggplot(aes(x=PC1,y=PC2,col=training$user_name),data=pcatraindata)+geom_point()
+```
+Because this pattern, inclusion of username covariate in the model may be important.
+
+## Decision Tree
+
+With decision tree method for build a model:
+```{r}
+model <- train(class~.,method="rpart",data=pcatraindata)
+pr <- predict(model,pcatraindata)
+confusionMatrix(as.factor(traindata$classe),pr)
+
+```
+The accuracy is very poor, and some classes are never classified.
+
+## Random Forest
+
+With random forest method, build another model. Now, applying Cross Validation with 20 k-folds.
+```{r}
+cnt <- trainControl(method="cv")
+model <- train(class~.,method="rf",data=pcatraindata,trControl=cnt)
+model$finalModel
+```
+Here we see that the Out-Of-Bag estimate of Error rate is ~12%. An acceptable level.
+
+Including username in the training dataset, there is no substantial change in performance, and the Gini decrease for username variable is very low.
+```{r}
+pcatraindata$user=training$user_name
+cnt <- trainControl(method="cv")
+modelnam <- train(class~.,method="rf",data=pcatraindata,trControl=cnt)
+modelnam$finalModel
+modelnam$finalModel$importance
+```
+## Predictions
+Using random forest model without username as covariate, calculate predictions on testing data:
+
+```{r}
+pcatestdata <- predict(pcacompute,testdata[,-52])
+predict(model,pcatestdata)
+```
+These are the predictions for solve the coursera test. Only one prediction of 20 are failed (5% error rate).
+
